@@ -18,7 +18,9 @@ import random
 import re
 import socket
 import sys
+import string
 import time
+from copy import deepcopy
 
 curDirectory = os.path.dirname(os.path.abspath(__file__))
 
@@ -2369,7 +2371,24 @@ def GetSimulator(storyName, doShuffle):
             dict_actionId = pickle.load(infile)
         return MachineOfDeathSimulator(doShuffle), dict_wordId, dict_actionId, 9
 
+def vectorize(sentence, size, mapping):
+    vec = np.zeros((size,)) # Create a vocabulary size column vector
+    replace_punctuation = string.maketrans(string.punctuation, ' '*len(string.punctuation))
+    sentence = ''.join([i if ord(i) < 128 else ' ' for i in sentence])
+    sentence = sentence.translate(replace_punctuation)
+    for index in map(lambda x: mapping[x.strip().lower()], sentence.split()): # For each word index
+        vec[index] += 1.0 # Increment count by 1
+    return vec
+
+def softmax_select(x, alpha):
+    exp = np.exp(alpha * x)
+    return exp / np.sum(exp)
+
+
 if __name__ == "__main__":
+    reload(sys)
+    sys.setdefaultencoding('utf-8')
+
     # parse arguments
     parser = argparse.ArgumentParser(description = "Text game simulators.")
     parser.add_argument("--name", type = str, help = "name of the text game, e.g. savingjohn, machineofdeath, fantasyworld", required = True)
@@ -2378,34 +2397,133 @@ if __name__ == "__main__":
 
     startTime = time.time()
     mySimulator, dict_wordId, dict_actionId, maxNumActions = GetSimulator(args.name, args.doShuffle == "True")
+    stateVocabSize = len(dict_wordId.keys())
+    print 'State vocabulary size = {0}'.format(stateVocabSize)
+    actionVocabSize = len(dict_actionId.keys())
+    print 'Action vocabulary size = {0}'.format(actionVocabSize)
     numEpisode = 0
     numStep = 0
-    while numEpisode < 10:
+    rewardSum = 0
+    totalEpisodes = 4000
+    prev_step = None
+    avg_reward = []
+    metric_freq = 200
+    
+    #### DRRN parameters ####
+    replay_limit = 5000
+    replay_mem = [] # Replay memory will be stored as a list of tuples
+    alpha = 0.2
+    learning_rate = 0.001
+    hidden_size = 100
+    gamma = 0.9
+    num_epochs = 10
+    batch_size = 32
+    #########################
+
+    #### DRRN Model ####
+    from keras.models import Model
+    from keras.layers import Input, Dense, merge
+    from keras.optimizers import Adam, SGD
+
+    st_inp = Input(shape=(stateVocabSize,))
+    st_h1 = Dense(hidden_size, activation='tanh')(st_inp)
+    st_h2 = Dense(hidden_size, activation='tanh')(st_h1)
+
+    act_inp = Input(shape=(actionVocabSize,))
+    act_h1 = Dense(hidden_size, activation='tanh')(act_inp)
+    act_h2 = Dense(hidden_size, activation='tanh')(act_h1)
+
+    merge = merge([st_h2, act_h2], mode='dot', dot_axes=1)
+    state_embed = Model(input=[st_inp], output=st_h2)
+    action_embed = Model(input=[act_inp], output=act_h2)
+    drrn = Model(input=[st_inp, act_inp], output=merge)
+    opt = Adam(lr=learning_rate)
+    drrn.compile(optimizer=opt, loss='mse')
+    ####################
+    
+    while numEpisode < totalEpisodes:
         (text, actions, reward) = mySimulator.Read()
-        print(text, actions, reward)
+        #print(text, actions, reward)
+        # Get state and action vectors for Q-value computation
+        state_vec = vectorize(text, stateVocabSize, dict_wordId)
+        action_vecs = [vectorize(a, actionVocabSize, dict_actionId) for a in actions]
+
+        if prev_step: # If this is not the first step in the episode
+           s, a = prev_step # Retrieve the previous state and action taken
+           replay_mem.append((s, a, reward, text, actions, False))  # Add transition to replay memory using current state and actions
+           rewardSum += reward # Record accumlated reward
+           while len(replay_mem) >= replay_limit: # If we have reached the capacity of replay memory
+               replay_mem.pop(0) # Remove least recent transitions until there is space for one more transition
+        
         if len(actions) == 0 or numStep > 250:
-            terminal = True
-            if terminal:
-                print 'TERMINAL STATE\n\n\n\n'
+            # We have reached a terminal state
+
+            # Remove last transition in replay memory and change the terminal bit
+            s, a, r, s_prime, a_primes, term = replay_mem.pop()
+            replay_mem.append((s, a, r, s_prime, a_primes, True))
+
+            # Reset simulator for next episode
             mySimulator.Restart()
             numEpisode += 1
+            avg_reward.append(rewardSum)
+            while len(avg_reward) > metric_freq:
+                avg_reward.pop(0)
+                
+            if numEpisode % 200 == 0:
+                print 'Completed episode {0}/{1}'.format(numEpisode, totalEpisodes)
+                print 'Total reward = {0}'.format(rewardSum)
+                print 'Average reward over the last {0} episodes = {1}'.format(metric_freq, np.mean(avg_reward))
+
+            rewardSum = 0
             numStep = 0
+            prev_step = None
+
+            if numEpisode % 200 == 0 and numEpisode > 0: # If we have collected 200 more episodes
+                state_inps = np.array([vectorize(x[0], stateVocabSize, dict_wordId) for x in replay_mem])
+                action_inps = np.array([vectorize(x[1], actionVocabSize, dict_actionId) for x in replay_mem])
+                
+                def get_replay_target(sars):
+                    s, a, r, s_prime, a_primes, terminal = sars
+
+                    if terminal:
+                        return r
+                    else:
+                        tstate_vec = vectorize(s_prime, stateVocabSize, dict_wordId)
+                        target_states = np.repeat(tstate_vec[np.newaxis,:], len(a_primes), axis=0)
+                        target_actions = np.array([vectorize(at, actionVocabSize, dict_actionId) for at in a_primes])
+                        q_vals = drrn.predict([target_states, target_actions], batch_size=1, verbose=0).flatten()
+                        max_q = np.max(q_vals)
+                        return r + gamma * max_q
+
+                train_mem = deepcopy(replay_mem)
+                np.random.shuffle(train_mem)
+                targets = np.array(map(lambda r: get_replay_target(r), train_mem))
+                loss_vals = drrn.fit([state_inps, action_inps], targets, batch_size=batch_size, nb_epoch=num_epochs, verbose=0, shuffle=True).history['loss']
+                print 'Per-epoch loss values: {0}'.format(loss_vals)
+                print
+            
         else:
-            terminal = False
-            playerInput = input()
-            # playerInput = random.randint(0, len(actions) - 1)
-            try:
-                print(actions[playerInput])
-                if mySimulator.title == "FantasyWorld":
-                    mySimulator.Act(actions[playerInput]) # for FantasyWorld, Act() takes a string as input
-                else:
-                    mySimulator.Act(playerInput) # playerInput is index of selected actions
-            except IndexError:
-                print('Invalid action choice -- selecting randomly')
-                rand = np.random.choice(len(actions))
-                print(actions[rand])
-                mySimulator.Act(rand)
+            # We are not in a terminal state
+
+            #Setup Numpy arrays for Q-value feedforward computation
+            state_inps = np.repeat(state_vec[np.newaxis,:], len(actions), axis=0)
+            action_inps = np.array(action_vecs)
+
+            # Get Q-values for each action and perform softmax selection
+            q_vals = drrn.predict([state_inps, action_inps], batch_size=1, verbose=0).flatten()
+            soft_select = softmax_select(q_vals, alpha)
+            
+            if mySimulator.title == "FantasyWorld":
+                playerInput = np.random.choice(actions, replace=False, p=soft_select)
+                mySimulator.Act(actions[playerInput]) # for FantasyWorld, Act() takes a string as input
+            else:
+                playerInput = np.random.choice(len(actions), replace=False, p=soft_select)
+                mySimulator.Act(playerInput) # playerInput is index of selected actions
+                
+            #print actions[playerInput]
+
+            prev_step = text, actions[playerInput]
     
-    numStep += 1
+            numStep += 1
     endTime = time.time()
     print("Duration: " + str(endTime - startTime))
