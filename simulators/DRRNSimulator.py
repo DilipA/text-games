@@ -2404,20 +2404,21 @@ if __name__ == "__main__":
     numEpisode = 0
     numStep = 0
     rewardSum = 0
-    totalEpisodes = 4000
+    totalEpisodes = 10000
     prev_step = None
     avg_reward = []
     metric_freq = 200
     
     #### DRRN parameters ####
-    replay_limit = 5000
+    replay_limit = 25000 # Value left unspecified in original paper
     replay_mem = [] # Replay memory will be stored as a list of tuples
-    alpha = 0.2
+    alpha = 0.2 # 0.2 for Saving John and 1.0 for Machine of Death
     learning_rate = 0.001
-    hidden_size = 100
+    hidden_size = 100 # Paper has empirical results for h=20, 50, & 100
     gamma = 0.9
-    num_epochs = 10
-    batch_size = 32
+    num_epochs = 3 # Value left unspecified in original paper
+    batch_size = 32 # Value left unspecified in original paper
+    activ = 'relu' # Paper uses tanh
     #########################
 
     #### DRRN Model ####
@@ -2426,18 +2427,18 @@ if __name__ == "__main__":
     from keras.optimizers import Adam, SGD
 
     st_inp = Input(shape=(stateVocabSize,))
-    st_h1 = Dense(hidden_size, activation='tanh')(st_inp)
-    st_h2 = Dense(hidden_size, activation='tanh')(st_h1)
+    st_h1 = Dense(hidden_size, activation=activ)(st_inp)
+    st_h2 = Dense(hidden_size, activation=activ)(st_h1)
 
     act_inp = Input(shape=(actionVocabSize,))
-    act_h1 = Dense(hidden_size, activation='tanh')(act_inp)
-    act_h2 = Dense(hidden_size, activation='tanh')(act_h1)
+    act_h1 = Dense(hidden_size, activation=activ)(act_inp)
+    act_h2 = Dense(hidden_size, activation=activ)(act_h1)
 
     merge = merge([st_h2, act_h2], mode='dot', dot_axes=1)
     state_embed = Model(input=[st_inp], output=st_h2)
     action_embed = Model(input=[act_inp], output=act_h2)
     drrn = Model(input=[st_inp, act_inp], output=merge)
-    opt = Adam(lr=learning_rate)
+    opt = SGD(lr=learning_rate) # Optimizer left unspecified in original paper
     drrn.compile(optimizer=opt, loss='mse')
     ####################
     
@@ -2473,6 +2474,7 @@ if __name__ == "__main__":
                 print 'Completed episode {0}/{1}'.format(numEpisode, totalEpisodes)
                 print 'Total reward = {0}'.format(rewardSum)
                 print 'Average reward over the last {0} episodes = {1}'.format(metric_freq, np.mean(avg_reward))
+                print 'Current replay memory = {0}/{1}'.format(len(replay_mem), replay_limit)
 
             rewardSum = 0
             numStep = 0
@@ -2510,8 +2512,11 @@ if __name__ == "__main__":
             action_inps = np.array(action_vecs)
 
             # Get Q-values for each action and perform softmax selection
-            q_vals = drrn.predict([state_inps, action_inps], batch_size=1, verbose=0).flatten()
+            q_vals = drrn.predict([state_inps, action_inps], batch_size=1, verbose=0)
+            q_vals = q_vals.flatten()
+            print q_vals.flatten()
             soft_select = softmax_select(q_vals, alpha)
+            print soft_select
             
             if mySimulator.title == "FantasyWorld":
                 playerInput = np.random.choice(actions, replace=False, p=soft_select)
