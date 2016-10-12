@@ -2407,18 +2407,19 @@ if __name__ == "__main__":
     totalEpisodes = 10000
     prev_step = None
     avg_reward = []
-    metric_freq = 200
+    metric_freq = 400
     
     #### DRRN parameters ####
-    replay_limit = 25000 # Value left unspecified in original paper
+    replay_limit = 4500 # Value left unspecified in original paper
     replay_mem = [] # Replay memory will be stored as a list of tuples
     alpha = 0.2 # 0.2 for Saving John and 1.0 for Machine of Death
     learning_rate = 0.001
     hidden_size = 100 # Paper has empirical results for h=20, 50, & 100
     gamma = 0.9
     num_epochs = 3 # Value left unspecified in original paper
-    batch_size = 32 # Value left unspecified in original paper
+    batch_size = 16 # Value left unspecified in original paper
     activ = 'relu' # Paper uses tanh
+    update_freq = 400 # Paper uses 200
     #########################
 
     #### DRRN Model ####
@@ -2470,7 +2471,7 @@ if __name__ == "__main__":
             while len(avg_reward) > metric_freq:
                 avg_reward.pop(0)
                 
-            if numEpisode % 200 == 0:
+            if numEpisode % metric_freq == 0:
                 print 'Completed episode {0}/{1}'.format(numEpisode, totalEpisodes)
                 print 'Total reward = {0}'.format(rewardSum)
                 print 'Average reward over the last {0} episodes = {1}'.format(metric_freq, np.mean(avg_reward))
@@ -2480,7 +2481,7 @@ if __name__ == "__main__":
             numStep = 0
             prev_step = None
 
-            if numEpisode % 200 == 0 and numEpisode > 0: # If we have collected 200 more episodes
+            if numEpisode % 400 == 0 and numEpisode > 0: # If we have collected more episodes
                 state_inps = np.array([vectorize(x[0], stateVocabSize, dict_wordId) for x in replay_mem])
                 action_inps = np.array([vectorize(x[1], actionVocabSize, dict_actionId) for x in replay_mem])
                 
@@ -2514,9 +2515,7 @@ if __name__ == "__main__":
             # Get Q-values for each action and perform softmax selection
             q_vals = drrn.predict([state_inps, action_inps], batch_size=1, verbose=0)
             q_vals = q_vals.flatten()
-            print q_vals.flatten()
             soft_select = softmax_select(q_vals, alpha)
-            print soft_select
             
             if mySimulator.title == "FantasyWorld":
                 playerInput = np.random.choice(actions, replace=False, p=soft_select)
