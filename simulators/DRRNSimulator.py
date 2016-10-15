@@ -2407,7 +2407,7 @@ if __name__ == "__main__":
     totalEpisodes = 10000
     prev_step = None
     avg_reward = []
-    metric_freq = 400
+    metric_freq = 200
     
     #### DRRN parameters ####
     replay_limit = 4500 # Value left unspecified in original paper
@@ -2416,9 +2416,9 @@ if __name__ == "__main__":
     learning_rate = 0.001
     hidden_size = 100 # Paper has empirical results for h=20, 50, & 100
     gamma = 0.9
-    num_epochs = 3 # Value left unspecified in original paper
-    batch_size = 16 # Value left unspecified in original paper
-    activ = 'relu' # Paper uses tanh
+    num_epochs = 1 # Value left unspecified in original paper
+    batch_size = 32 # Value left unspecified in original paper
+    activ = 'tanh' # Paper uses tanh
     update_freq = 400 # Paper uses 200
     #########################
 
@@ -2451,11 +2451,36 @@ if __name__ == "__main__":
         action_vecs = [vectorize(a, actionVocabSize, dict_actionId) for a in actions]
 
         if prev_step: # If this is not the first step in the episode
-           s, a = prev_step # Retrieve the previous state and action taken
-           replay_mem.append((s, a, reward, text, actions, False))  # Add transition to replay memory using current state and actions
-           rewardSum += reward # Record accumlated reward
-           while len(replay_mem) >= replay_limit: # If we have reached the capacity of replay memory
-               replay_mem.pop(0) # Remove least recent transitions until there is space for one more transition
+            s, a = prev_step # Retrieve the previous state and action taken
+            replay_mem.append((s, a, reward, text, actions, False))  # Add transition to replay memory using current state and actions
+            rewardSum += reward # Record accumlated reward
+            while len(replay_mem) >= replay_limit: # If we have reached the capacity of replay memory
+                replay_mem.pop(0) # Remove least recent transitions until there is space for one more transition
+
+            #if numEpisode % 400 == 0 and numEpisode > 0: # If we have collected more episodes
+            if len(replay_mem) > batch_size and len(actions) > 0 :
+                state_inps = np.array([vectorize(x[0], stateVocabSize, dict_wordId) for x in replay_mem])
+                action_inps = np.array([vectorize(x[1], actionVocabSize, dict_actionId) for x in replay_mem])
+                    
+                def get_replay_target(sars):
+                    s, a, r, s_prime, a_primes, terminal = sars
+
+                    if terminal:
+                        return r
+                    else:
+                        tstate_vec = vectorize(s_prime, stateVocabSize, dict_wordId)                        
+                        target_states = np.repeat(tstate_vec[np.newaxis,:], len(a_primes), axis=0)
+                        target_actions = np.array([vectorize(at, actionVocabSize, dict_actionId) for at in a_primes])
+                        q_vals = drrn.predict([target_states, target_actions], batch_size=1, verbose=0).flatten()
+                        max_q = np.max(q_vals)
+                        return r + gamma * max_q
+
+                train_mem = deepcopy(replay_mem)
+                np.random.shuffle(train_mem)
+                targets = np.array(map(lambda r: get_replay_target(r), train_mem))
+                loss_vals = drrn.fit([state_inps, action_inps], targets, batch_size=batch_size, nb_epoch=num_epochs, verbose=0, shuffle=True).history['loss']
+                #print 'Per-epoch loss values: {0}'.format(loss_vals)
+                #print
         
         if len(actions) == 0 or numStep > 250:
             # We have reached a terminal state
@@ -2471,43 +2496,17 @@ if __name__ == "__main__":
             while len(avg_reward) > metric_freq:
                 avg_reward.pop(0)
                 
+            print 'Completed episode {0}/{1}'.format(numEpisode, totalEpisodes)
+            print 'Total reward = {0}, # of steps = {1}'.format(rewardSum, numStep)    
             if numEpisode % metric_freq == 0:
-                print 'Completed episode {0}/{1}'.format(numEpisode, totalEpisodes)
-                print 'Total reward = {0}'.format(rewardSum)
                 print 'Average reward over the last {0} episodes = {1}'.format(metric_freq, np.mean(avg_reward))
-                print 'Current replay memory = {0}/{1}'.format(len(replay_mem), replay_limit)
+                #print 'Current replay memory = {0}/{1}'.format(len(replay_mem), replay_limit)
 
             rewardSum = 0
             numStep = 0
-            prev_step = None
-
-            if numEpisode % 400 == 0 and numEpisode > 0: # If we have collected more episodes
-                state_inps = np.array([vectorize(x[0], stateVocabSize, dict_wordId) for x in replay_mem])
-                action_inps = np.array([vectorize(x[1], actionVocabSize, dict_actionId) for x in replay_mem])
-                
-                def get_replay_target(sars):
-                    s, a, r, s_prime, a_primes, terminal = sars
-
-                    if terminal:
-                        return r
-                    else:
-                        tstate_vec = vectorize(s_prime, stateVocabSize, dict_wordId)
-                        target_states = np.repeat(tstate_vec[np.newaxis,:], len(a_primes), axis=0)
-                        target_actions = np.array([vectorize(at, actionVocabSize, dict_actionId) for at in a_primes])
-                        q_vals = drrn.predict([target_states, target_actions], batch_size=1, verbose=0).flatten()
-                        max_q = np.max(q_vals)
-                        return r + gamma * max_q
-
-                train_mem = deepcopy(replay_mem)
-                np.random.shuffle(train_mem)
-                targets = np.array(map(lambda r: get_replay_target(r), train_mem))
-                loss_vals = drrn.fit([state_inps, action_inps], targets, batch_size=batch_size, nb_epoch=num_epochs, verbose=0, shuffle=True).history['loss']
-                print 'Per-epoch loss values: {0}'.format(loss_vals)
-                print
-            
+            prev_step = None                  
         else:
             # We are not in a terminal state
-
             #Setup Numpy arrays for Q-value feedforward computation
             state_inps = np.repeat(state_vec[np.newaxis,:], len(actions), axis=0)
             action_inps = np.array(action_vecs)
@@ -2529,5 +2528,7 @@ if __name__ == "__main__":
             prev_step = text, actions[playerInput]
     
             numStep += 1
+
+        
     endTime = time.time()
     print("Duration: " + str(endTime - startTime))
