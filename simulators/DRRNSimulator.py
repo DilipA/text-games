@@ -2372,11 +2372,17 @@ def GetSimulator(storyName, doShuffle):
         return MachineOfDeathSimulator(doShuffle), dict_wordId, dict_actionId, 9
 
 def vectorize(sentence, size, mapping):
-    vec = np.zeros((size,)) # Create a vocabulary size column vector
+    
     replace_punctuation = string.maketrans(string.punctuation, ' '*len(string.punctuation))
     sentence = ''.join([i if ord(i) < 128 else ' ' for i in sentence])
     sentence = sentence.translate(replace_punctuation)
-    for index in map(lambda x: mapping[x.strip().lower()], sentence.split()): # For each word index
+    for w in [x.strip().lower() for x in sentence.split()]:
+        if mapping.get(w, None) == None:
+            print 'Missing vocab word: ', w
+            print 'Vocab size: ', size
+
+    vec = np.zeros((size,)) # Create a vocabulary size column vector
+    for index in [mapping[x.strip().lower()] for x in sentence.split()]: # For each word index
         vec[index] += 1.0 # Increment count by 1
     return vec
 
@@ -2397,6 +2403,27 @@ if __name__ == "__main__":
 
     startTime = time.time()
     mySimulator, dict_wordId, dict_actionId, maxNumActions = GetSimulator(args.name, args.doShuffle == "True")
+    
+    if args.name == 'machineofdeath': # Certain words are missing from the dictionaries, so add them manually
+        next_w_id = len(dict_wordId.keys())
+        next_a_id = len(dict_actionId.keys())
+        dict_wordId['dollars'] = next_w_id
+        next_w_id += 1
+        dict_wordId['land'] = next_w_id
+        next_w_id += 1
+        dict_wordId['pavement'] = next_w_id
+        next_w_id += 1
+        dict_wordId['forgot'] = next_w_id
+        next_w_id += 1
+        dict_wordId['glance'] = next_w_id
+        next_w_id += 1
+        dict_wordId['tufo'] = next_w_id
+        for i in range(30):
+            if str(i) not in dict_wordId.keys():
+                next_w_id += 1
+                dict_wordId[str(i)] = next_w_id
+
+        
     stateVocabSize = len(dict_wordId.keys())
     print 'State vocabulary size = {0}'.format(stateVocabSize)
     actionVocabSize = len(dict_actionId.keys())
@@ -2404,20 +2431,24 @@ if __name__ == "__main__":
     numEpisode = 0
     numStep = 0
     rewardSum = 0
-    totalEpisodes = 10000
+    totalEpisodes = 4000
     prev_step = None
     avg_reward = []
     metric_freq = 200
     
     #### DRRN parameters ####
-    replay_limit = 4500 # Value left unspecified in original paper
+    replay_limit = 3000 # Value left unspecified in original paper
     replay_mem = [] # Replay memory will be stored as a list of tuples
-    alpha = 0.2 # 0.2 for Saving John and 1.0 for Machine of Death
+    if args.name == 'savingjohn':
+        alpha = 0.2
+    else:
+        alpha = 1.0
+        
     learning_rate = 0.001
     hidden_size = 100 # Paper has empirical results for h=20, 50, & 100
     gamma = 0.9
     num_epochs = 1 # Value left unspecified in original paper
-    batch_size = 32 # Value left unspecified in original paper
+    batch_size = 64 # Value left unspecified in original paper
     activ = 'tanh' # Paper uses tanh
     update_freq = 400 # Paper uses 200
     #########################
@@ -2439,9 +2470,11 @@ if __name__ == "__main__":
     state_embed = Model(input=[st_inp], output=st_h2)
     action_embed = Model(input=[act_inp], output=act_h2)
     drrn = Model(input=[st_inp, act_inp], output=merge)
-    opt = SGD(lr=learning_rate) # Optimizer left unspecified in original paper
+    opt = Adam(lr=learning_rate) # Optimizer left unspecified in original paper
     drrn.compile(optimizer=opt, loss='mse')
     ####################
+
+    results = []
     
     while numEpisode < totalEpisodes:
         (text, actions, reward) = mySimulator.Read()
@@ -2457,10 +2490,10 @@ if __name__ == "__main__":
             while len(replay_mem) >= replay_limit: # If we have reached the capacity of replay memory
                 replay_mem.pop(0) # Remove least recent transitions until there is space for one more transition
 
-            #if numEpisode % 400 == 0 and numEpisode > 0: # If we have collected more episodes
             if len(replay_mem) > batch_size and len(actions) > 0 :
-                state_inps = np.array([vectorize(x[0], stateVocabSize, dict_wordId) for x in replay_mem])
-                action_inps = np.array([vectorize(x[1], actionVocabSize, dict_actionId) for x in replay_mem])
+                sampled = np.random.choice(len(replay_mem), size=batch_size, replace=False)
+                state_inps = np.array([vectorize(replay_mem[x][0], stateVocabSize, dict_wordId) for x in sampled])
+                action_inps = np.array([vectorize(replay_mem[x][1], actionVocabSize, dict_actionId) for x in sampled])
                     
                 def get_replay_target(sars):
                     s, a, r, s_prime, a_primes, terminal = sars
@@ -2475,11 +2508,11 @@ if __name__ == "__main__":
                         max_q = np.max(q_vals)
                         return r + gamma * max_q
 
-                train_mem = deepcopy(replay_mem)
-                np.random.shuffle(train_mem)
-                targets = np.array(map(lambda r: get_replay_target(r), train_mem))
-                loss_vals = drrn.fit([state_inps, action_inps], targets, batch_size=batch_size, nb_epoch=num_epochs, verbose=0, shuffle=True).history['loss']
-                #print 'Per-epoch loss values: {0}'.format(loss_vals)
+                loss = 0.0
+                for index, r in enumerate(sampled):
+                    target = np.array([get_replay_target(replay_mem[r])])
+                    loss += drrn.fit([np.array([state_inps[index]]), np.array([action_inps[index]])], target, batch_size=1, nb_epoch=1, verbose=0, shuffle=True).history['loss'][0]
+                #print loss / batch_size
                 #print
         
         if len(actions) == 0 or numStep > 250:
@@ -2497,11 +2530,15 @@ if __name__ == "__main__":
                 avg_reward.pop(0)
                 
             print 'Completed episode {0}/{1}'.format(numEpisode, totalEpisodes)
-            print 'Total reward = {0}, # of steps = {1}'.format(rewardSum, numStep)    
+            print 'Total reward = {0}, # of steps = {1}'.format(rewardSum, numStep)
+            print 'Current replay memory = {0}/{1}'.format(len(replay_mem), replay_limit)
+            
             if numEpisode % metric_freq == 0:
                 print 'Average reward over the last {0} episodes = {1}'.format(metric_freq, np.mean(avg_reward))
+                results.append(np.mean(avg_reward))
                 #print 'Current replay memory = {0}/{1}'.format(len(replay_mem), replay_limit)
-
+            print
+            
             rewardSum = 0
             numStep = 0
             prev_step = None                  
@@ -2532,3 +2569,4 @@ if __name__ == "__main__":
         
     endTime = time.time()
     print("Duration: " + str(endTime - startTime))
+    print 'Results: {0}'.format(results)
