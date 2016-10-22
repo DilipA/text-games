@@ -2365,9 +2365,9 @@ def GetSimulator(storyName, doShuffle):
             dict_actionId = pickle.load(infile)
         return SavingJohnSimulator(doShuffle, os.path.join(curDirectory, "savingjohn.pickle")), dict_wordId, dict_actionId, 4
     if storyName.lower() == "machineofdeath":
-        with open(os.path.join(curDirectory, "machineofdeath_wordId.pickle"), "r") as infile:
+        with open(os.path.join(curDirectory, "machineofdeath_wordId2.pickle"), "r") as infile:
             dict_wordId = pickle.load(infile)
-        with open(os.path.join(curDirectory, "machineofdeath_actionId.pickle"), "r") as infile:
+        with open(os.path.join(curDirectory, "machineofdeath_actionId2.pickle"), "r") as infile:
             dict_actionId = pickle.load(infile)
         return MachineOfDeathSimulator(doShuffle), dict_wordId, dict_actionId, 9
 
@@ -2376,11 +2376,6 @@ def vectorize(sentence, size, mapping):
     replace_punctuation = string.maketrans(string.punctuation, ' '*len(string.punctuation))
     sentence = ''.join([i if ord(i) < 128 else ' ' for i in sentence])
     sentence = sentence.translate(replace_punctuation)
-    for w in [x.strip().lower() for x in sentence.split()]:
-        if mapping.get(w, None) == None:
-            print 'Missing vocab word: ', w
-            print 'Vocab size: ', size
-
     vec = np.zeros((size,)) # Create a vocabulary size column vector
     for index in [mapping[x.strip().lower()] for x in sentence.split()]: # For each word index
         vec[index] += 1.0 # Increment count by 1
@@ -2403,26 +2398,6 @@ if __name__ == "__main__":
 
     startTime = time.time()
     mySimulator, dict_wordId, dict_actionId, maxNumActions = GetSimulator(args.name, args.doShuffle == "True")
-    
-    if args.name == 'machineofdeath': # Certain words are missing from the dictionaries, so add them manually
-        next_w_id = len(dict_wordId.keys())
-        next_a_id = len(dict_actionId.keys())
-        dict_wordId['dollars'] = next_w_id
-        next_w_id += 1
-        dict_wordId['land'] = next_w_id
-        next_w_id += 1
-        dict_wordId['pavement'] = next_w_id
-        next_w_id += 1
-        dict_wordId['forgot'] = next_w_id
-        next_w_id += 1
-        dict_wordId['glance'] = next_w_id
-        next_w_id += 1
-        dict_wordId['tufo'] = next_w_id
-        for i in range(30):
-            if str(i) not in dict_wordId.keys():
-                next_w_id += 1
-                dict_wordId[str(i)] = next_w_id
-
         
     stateVocabSize = len(dict_wordId.keys())
     print 'State vocabulary size = {0}'.format(stateVocabSize)
@@ -2450,7 +2425,6 @@ if __name__ == "__main__":
     num_epochs = 1 # Value left unspecified in original paper
     batch_size = 64 # Value left unspecified in original paper
     activ = 'tanh' # Paper uses tanh
-    update_freq = 400 # Paper uses 200
     #########################
 
     #### DRRN Model ####
@@ -2536,6 +2510,7 @@ if __name__ == "__main__":
             if numEpisode % metric_freq == 0:
                 print 'Average reward over the last {0} episodes = {1}'.format(metric_freq, np.mean(avg_reward))
                 results.append(np.mean(avg_reward))
+                print 'Result values collected thus far: {0}'.format(results)
                 #print 'Current replay memory = {0}/{1}'.format(len(replay_mem), replay_limit)
             print
             
