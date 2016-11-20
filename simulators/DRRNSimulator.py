@@ -2412,18 +2412,22 @@ if __name__ == "__main__":
     metric_freq = 200
     
     #### DRRN parameters ####
-    replay_limit = 3000 # Value left unspecified in original paper
+    
     replay_mem = [] # Replay memory will be stored as a list of tuples
     if args.name == 'savingjohn':
         alpha = 0.2
+        replay_limit = 3000 # Value left unspecified in original paper
+        batch_size = 64 # Value left unspecified in original paper
     else:
         alpha = 1.0
+        replay_limit = 1000000 # Value left unspecified in original paper
+        batch_size = 1 # Value left unspecified in original paper
         
     learning_rate = 0.001
     hidden_size = 100 # Paper has empirical results for h=20, 50, & 100
     gamma = 0.9
     num_epochs = 1 # Value left unspecified in original paper
-    batch_size = 64 # Value left unspecified in original paper
+    
     activ = 'tanh' # Paper uses tanh
     #########################
 
