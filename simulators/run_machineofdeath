@@ -1,0 +1,4 @@
+#!/usr/local/bin/bash
+source /course/cs2950k/tf_gpu_venv/bin/activate
+time python text-games/simulators/DRRNSimulator.py --name machineofdeath --doShuffle True
+
