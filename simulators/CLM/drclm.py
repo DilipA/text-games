@@ -13,6 +13,7 @@ from copy import deepcopy
 from bidict import bidict
 from replay import ReplayBuffer
 
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 cur_directory = os.path.dirname(os.path.abspath(__file__))
 replace_punct = re.compile('[^\s\w_]+')
 
@@ -36,7 +37,7 @@ def contains_nums(sentence):
 def build_lookup():
     corpus = nltk.corpus.brown.sents(categories=['news'])
     corpus = [' '.join(x) for x in corpus]
-    sentences = filter(lambda x: len(x) <= 100 and not contains_nums(x), [clean_string(sentence.lower()) for sentence in corpus])
+    sentences = filter(lambda x: len(x) <= 50 and len(x) > 0 and not contains_nums(x), [clean_string(sentence.lower()) for sentence in corpus])
     max_len = max([len(s) for s in sentences])
     train_vocab = set(reduce(lambda x,y: x+y, [list(x) for x in sentences]))
     vocab_lookup = bidict({char : id for id, char in enumerate(train_vocab)})
@@ -86,8 +87,9 @@ if __name__ == "__main__":
     activ = lambda: LeakyReLU(alpha=0.0001) # Paper uses tanh
     #########################
 
-    st_inp = Input(shape=(max_len, 1)) # State (sentence) input will be a tensor of shape (batch x max_len x 1)
-    st_h1 = LSTM(hidden_size, activation=activ(), unroll=True, consume_less=consumption, input_shape=(max_len, 1))(st_inp)
+    st_inp = Input(shape=(max_len,)) # State (sentence) input will be a tensor of shape (batch x max_len x 1)
+    #st_h1 = LSTM(hidden_size, activation=activ(), unroll=True, consume_less=consumption, input_shape=(max_len, 1))(st_inp)
+    st_h1 = Dense(hidden_size, activation=activ(), input_shape=(max_len,))(st_inp)
     st_h2 = Dense(hidden_size, activation=activ())(st_h1)
 
     act_inp = Input(shape=(vocab_size,)) # Action will be an integer corresponding to a character
@@ -106,7 +108,7 @@ if __name__ == "__main__":
         random.shuffle(sentences)
         for episode, sentence in enumerate(sentences): # One sentences => one episode
             episode = episode + 1
-            curr_state = np.empty((100,1))
+            curr_state = np.empty((max_len,))
             curr_state.fill(-1)
             agent_sentence = []
             termination = len(sentence)
@@ -123,7 +125,7 @@ if __name__ == "__main__":
                         if terminal:
                             return reward
                         else:
-                            target_states = np.repeat(target_state[np.newaxis,:,:], vocab_size, axis=0)
+                            target_states = np.repeat(target_state[np.newaxis,:], vocab_size, axis=0)
                             target_actions = np.identity(vocab_size)
                             q_vals = drlm.predict([target_states, target_actions], batch_size=1, verbose=0).flatten()
                             max_q = np.max(q_vals)
@@ -136,7 +138,7 @@ if __name__ == "__main__":
                 ## Select an action based on the current state according to a Boltzmann policy
                 
                 #Setup Numpy arrays for Q-value feedforward computation
-                state_inps = np.repeat(curr_state[np.newaxis,:,:], vocab_size, axis=0)
+                state_inps = np.repeat(curr_state[np.newaxis,:], vocab_size, axis=0)
                 action_inps = np.identity(vocab_size)
                         
                 # Get Q-values for each action and perform softmax selection
@@ -147,7 +149,7 @@ if __name__ == "__main__":
                 soft_select = softmax_select(q_vals, alpha)
                 if np.isnan(soft_select).any():
                     soft_select = (1.0 / vocab_size) * np.ones((vocab_size,))
-                    print 'Using uniform action selection'
+                    #print 'Using uniform action selection'
 
                 # Select action according to distribution
                 action = np.random.choice(vocab_size, replace=False, p=soft_select)
@@ -157,7 +159,7 @@ if __name__ == "__main__":
 
                 # Update to next state
                 prev_state = curr_state
-                curr_state[step, :] = action
+                curr_state[step] = action
 
                 # If the next transition will send us to a termminal state
                 if step+1 == termination:
