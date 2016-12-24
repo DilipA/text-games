@@ -42,8 +42,10 @@ def softmax_select(x, alpha):
     exp = np.exp(alpha * x)
     return exp / np.sum(exp)
 
-def compute_bleu(cand, ref):
-    return np.sum(np.clip(cand, 0, ref)) / np.sum(cand)
+def compute_reward(gen, true):
+    return min(np.sum(gen - true), np.sum(true-gen))
+
+    return ret
 
 if __name__ == "__main__":
     reload(sys)
@@ -63,6 +65,8 @@ if __name__ == "__main__":
     vocab_size = len(train_lookup.keys())
     print 'Vocabulary size = {0}'.format(vocab_size)
     print 'Maximum sentence length = {0}'.format(maxStep)
+    if vocab_size <= 20:
+        print 'Vocabulary: {0}'.format(train_lookup.keys())
     
     numEpisode = 0
     numStep = 0
@@ -81,7 +85,7 @@ if __name__ == "__main__":
     replay_mem = [] # Replay memory will be stored as a list of tuples
     alpha = 1.0 # TODO: See if there is a better setting of this value
         
-    learning_rate = 0.0025 # 10x the learning rate of Nature DQN
+    learning_rate = 0.001 # 10x the learning rate of Nature DQN
     rand_exp = 1000 # Number of episodes to take under random policy
     hidden_size = 100
     gamma = 0.99
@@ -123,7 +127,7 @@ if __name__ == "__main__":
             state = vectorize(START, vocab_size, train_lookup) # Always start with the START symbol
             real_state = [START]
             
-            for t in xrange(maxStep):
+            for t in xrange(maxStep+1):
                 #print 'DRLM agent sentence: {0}'.format(real_state)
                 if prev_step: # If this is not the first step in the episode
                     s, a, r = prev_step # Retrieve the previous state and action taken
@@ -153,7 +157,7 @@ if __name__ == "__main__":
                             target = np.array([get_replay_target(replay_mem[r])])
                             loss += drlm.fit([np.array([state_inps[index]]), np.array([action_inps[index]])], target, batch_size=1, nb_epoch=1, verbose=0, shuffle=True).history['loss'][0]
                         print 'Loss = {0}'.format(loss / batch_size)
-                        #print
+                        print
         
                 if prev_step: # If the last word selected by the agent was the STOP symbol
                     if prev_step[1] == stop_id:
@@ -169,8 +173,10 @@ if __name__ == "__main__":
                         #    avg_reward.pop(0)
                 
                         print 'Completed episode {0}/{1}'.format(numEpisode, totalEpisodes)
+                        print 'Generated sentence: {0}'.format(real_state)
                         print 'Total reward = {0}, # of steps = {1}'.format(rewardSum, numStep)
                         print 'Current replay memory = {0}/{1}'.format(len(replay_mem), replay_limit)
+                        print
             
                         #if numEpisode % metric_freq == 0:
                         #    print 'Average reward over the last {0} episodes = {1}'.format(metric_freq, np.mean(avg_reward))
@@ -203,14 +209,17 @@ if __name__ == "__main__":
                             action = np.random.choice(vocab_size, replace=False, p=soft_select)  # Select action according to distribution
                         else:
                             action = stop_id
+                        #print 'Selected action {0}'.format(action)
                         
-                        if action == stop_id: # Dropped STOP symbol so compute BLEU score
-                            reward = compute_bleu(state, sentence)
-                        else:
-                            reward = 0.0
+                        #if action == stop_id or t == maxStep-1: # Dropped STOP symbol so compute reward
+                        reward = compute_reward(state, sentence)
+                        #print 'Reward: ', reward
+                        #else:
+                        #    reward = 0.0
                         
                         prev_step = state, action, reward  # Keep track of transition
                         state[action] += 1 # Update state BOW vector according to selected action/word
+                        rewardSum += reward
                         real_state.append(train_lookup.inv[action])
                         numStep += 1
                     
@@ -233,14 +242,17 @@ if __name__ == "__main__":
                         action = np.random.choice(vocab_size, replace=False, p=soft_select)  # Select action according to distribution
                     else:
                         action = stop_id
+                    #print 'Selected action {0}'.format(action)
                         
-                    if action == stop_id: # Dropped STOP symbol so compute BLEU score
-                        reward = compute_bleu(state, sentence)
-                    else:
-                        reward = 0.0
+                    #if action == stop_id or t == maxStep-1: # Dropped STOP symbol so compute BLEU score
+                    reward = compute_reward(state, sentence)
+                    #print 'Reward: ', reward
+                    #else:
+                    #    reward = 0.0
                         
                     prev_step = state, action, reward  # Keep track of transition
                     state[action] += 1 # Update state BOW vector according to selected action/word
+                    rewardSum += reward
                     real_state.append(train_lookup.inv[action])
                     numStep += 1
-            sys.exit(0)
+            #sys.exit(0)
